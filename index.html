@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>QR Binary Scanner (Max Size)</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; background: #111; color: #eee; }
+    video, canvas { max-width: 90%; margin-top: 10px; border: 2px solid #444; }
+    input { margin-top: 10px; padding: 8px; font-size: 16px; width: 60%; }
+  </style>
+</head>
+<body>
+
+<h2>QR Binary Scanner (Up to ~2953 bytes)</h2>
+
+<video id="video" autoplay playsinline></video>
+<canvas id="canvas"></canvas>
+
+<p id="status">Waiting for QR...</p>
+
+<!-- ✅ USER INPUT -->
+<input id="filename" placeholder="Enter filename (example: file.bin)" />
+
+<div id="result"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/jsqr/dist/jsQR.js"></script>
+
+<script>
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const status = document.getElementById("status");
+const result = document.getElementById("result");
+const filenameInput = document.getElementById("filename");
+
+let lastScanTime = 0;
+
+navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+  .then(stream => {
+    video.srcObject = stream;
+    requestAnimationFrame(scan);
+  })
+  .catch(err => {
+    status.textContent = "Camera error: " + err;
+  });
+
+function scan() {
+  if (video.readyState === video.HAVE_ENOUGH_DATA) {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    ctx.drawImage(video, 0, 0);
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+    const code = jsQR(img.data, canvas.width, canvas.height);
+
+    if (code && Date.now() - lastScanTime > 2000) {
+      lastScanTime = Date.now();
+      handleQR(code);
+    }
+  }
+
+  requestAnimationFrame(scan);
+}
+
+async function handleQR(code) {
+  let bytes;
+
+  if (code.binaryData) {
+    bytes = new Uint8Array(code.binaryData);
+  } else {
+    bytes = new TextEncoder().encode(code.data);
+  }
+
+  status.textContent = `Detected ${bytes.length} bytes`;
+
+  if (bytes.length > 3000) {
+    status.textContent = "Error: exceeds max QR capacity";
+    return;
+  }
+
+  // ✅ get filename from user
+  let filename = filenameInput.value.trim();
+
+  if (!filename) {
+    filename = "file.bin"; // fallback
+  }
+
+  try {
+    const res = await fetch("/upload", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        bytes: Array.from(bytes),
+        filename: filename
+      })
+    });
+
+    const json = await res.json();
+
+    if (json.success) {
+      result.innerHTML = `
+        <p>Saved as: ${json.file} (${json.size} bytes)</p>
+        <a href="/download/${json.file}" target="_blank">Download File</a>
+      `;
+    } else {
+      status.textContent = "Upload failed";
+    }
+
+  } catch (err) {
+    status.textContent = "Error: " + err;
+  }
+}
+</script>
+
+</body>
+</html>
